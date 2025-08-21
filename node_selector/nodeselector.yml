@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sindhu-deployment
+  labels:
+    name: nginx1
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      name: nginx1
+  template:
+    metadata:
+      labels:
+        name: nginx1
+    spec:
+      nodeSelector:
+        cpu: "true"
+
+        
+         
+      containers:
+      - name: nginx
+        image: sindhu0/your-image-name:latest
+        ports:
+        - containerPort: 80
