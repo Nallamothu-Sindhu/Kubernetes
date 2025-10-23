@@ -1,0 +1,297 @@
+1. Manual Scheduling
+Manual scheduling means assigning a Pod to a specific Node manually, without using the default Kubernetes scheduler.
+Method 1: Using nodeName
+pod will run on node1 directly
+
+# Manual Scheduling
+apiVersion: v1
+kind: pod
+metadata:
+  name: manual pod
+spec:
+  containers:
+    - name: nginx
+      image: nginx
+  nodeName: node1   
+
+Method 2: Using a Binding Object
+Create a Pod without nodeName — it will stay in Pending.
+Then create a Binding object to attach it to a Node.
+
+apiVersion: v1
+kind: pod
+metadata:
+   name: bindobject
+target:
+  apiVersion: v1
+  kind: Node
+  name: node1
+
+Mostly used for testing, debugging, or custom schedulers.
+
+---------------------------------------------------------------------------------------
+ 2. Labels and Selectors in Kubernetes
+
+Labels are key–value pairs attached to Kubernetes objects (like Pods, Nodes, Services, etc.).
+Selectors are used to filter or group those objects based on their labels.
+To organize, group, and select specific Kubernetes resources.
+Helps Services, Deployments, and ReplicaSets identify the Pods they manage.
+#labels
+apiVersion: v1
+kind: pod
+metadata: 
+  name: Labels
+  labels:
+    name: web-app
+    environment: dev
+spec:
+  containers:
+    - name: nginx 
+      image: nginx
+# Selectors
+Selectors are used to choose Pods with specific labels.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx           # <--- Controller selects Pods with this label
+  template:
+    metadata:
+      labels:
+        app: nginx         # <--- Must match the selector above
+    spec:
+      containers:
+      - name: nginx
+        image: nginx
+
+we have matchLables, matchExpression etc
+Common use: connecting Services → Pods, ReplicaSets → Pods.
+Not unique: multiple objects can share same label.
+
+-----------------------------------------------------------------------------------------------------
+3. Taints and Tolerations in kubernetes
+Taints are applied on Nodes to restrict Pods from being scheduled unless they have matching tolerations.
+Tolerations are applied on Pods to let them tolerate specific Node taints.
+They’re used for workload isolation and Node control.
+Unlike labels and selectors (which attract Pods), taints and tolerations repel Pods unless explicitly tolerated.”
+
+types of Taint Effects
+
+NoSchedule: Prevents Pods without matching toleration from being scheduled on the Node.
+PreferNoSchedule: Tries to avoid scheduling Pods without toleration, but not strict.
+NoExecute: Prevents new Pods without toleration from scheduling,Removes existing non-tolerant Pods from the Node.
+
+tainting node
+-> kubectl taint node node01 key=value:NoSchedule
+untaint the node
+-> kubectl taint node node01 key=value:NoSchedule-
+
+apiVersion: v1
+kind: pod
+metadata: 
+  name: toleration
+spec:
+  containers:
+    - name: nginx
+      imgae: nginx
+  tolerations:
+    - key: "app"
+      operator: "Equal"
+      value: "nginx"
+      effect: "NoExecute"
+
+NodeSelector / Affinity → “where to run.”
+Taints / Tolerations → “where not to run (unless allowed).”
+
+Why We Use Taints and Tolerations:
+Used to control which Pods can run on which Nodes.
+Helps in workload isolation (e.g., separate prod, dev, test Pods).
+Used for node reservation (like GPU nodes for ML workloads).
+Provides protection for critical Nodes (e.g., control-plane).
+Why Not Only Labels or NodeSelectors:
+Labels/NodeSelectors attract Pods → “Run here if possible.”
+Taints/Tolerations repel Pods → “Don’t run here unless allowed.”
+Labels decide where Pods should go, Taints decide where they shouldn’t.
+Both work together for fine-grained scheduling and workload control.
+
+------------------------------------------------------------------------------------------------
+4. Node Selectors
+“Node Selector is the simplest way to restrict Pods to specific Nodes using labels.
+We label the Node and use nodeSelector in the Pod spec to match that label.
+It’s simple but limited — for complex matching, we use Node Affinity.”
+
+apiVersion: v1
+kind: pod
+metadata:
+  name: nodeSelector
+spec:
+  containers:
+    - name: nginx
+      image: nginx
+  nodeSelector:
+    disktype: ssd
+
+Why We Use NodeSelector
+To control Pod placement easily.
+To ensure Pods run on Nodes with required hardware or environment (e.g., GPU, SSD, region).
+Useful for simple scheduling rules.
+Limitations
+Works only with exact key–value matches.
+Can’t use conditions (like in, notin, etc.).
+For advanced rules, use Node Affinity instead.
+
+--------------------------------------------------------------------------------------------------
+5. Node Affinity
+Node Affinity allows Pods to be scheduled on Nodes based on label rules.
+It’s more powerful than NodeSelector because it supports operators like In, NotIn, Exists, and allows both hard and soft rules.
+Types of Node Affinity:
+RequiredDuringSchedulingIgnoredDuringExecution:
+Pod must be scheduled on Nodes that match the rule.
+if label was not matches Pod will not be scheduled and stays in Pending state until a matching Node appears.
+preferredDuringSchedulingIgnoredDuringExecution:
+Pod tries to run on Nodes that meet the preferred conditions, but can still run elsewhere if no such Node is found.
+Pod will still run on a non-matching Node if no preferred Node is available.
+
+# node affinity
+
+apiVersion: v1
+kind: pod
+metadata:
+  name: node-affinity
+spec:
+  affinity:
+    nodeaffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: disktype
+            operator: In
+            values:
+            - ssd
+
+  containers:
+    - name: nginx
+      image: nginx
+
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: soft-affinity-pod
+spec:
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 1
+        preference:
+          matchExpressions:
+          - key: region
+            operator: In
+            values:
+            - us-east
+  containers:
+  - name: nginx
+    image: nginx
+
+Required = “Must run here, or don’t run at all.”
+Preferred = “Try to run here if possible, but run somewhere else if not.”
+
+example operators:
+Operator	Meaning	Example
+In:
+Node label value must be in the given list.	key: disktype, values: [ssd, nvme]
+NotIn:
+Node label value must not be in the list.	key: env, values: [dev, test]
+Exists:
+Node must have this label key (any value).	key: region
+
+feature     	         Node Affinity	              NodeSelector	          Taints/Tolerations
+Flexibility	      Multiple rules & operators	    Only exact match	         Repel logic only
+Soft Rules	      Preferred scheduling possible	  Not supported	           Not supported
+Complex Matching  Supports In, NotIn, etc.	      Simple match only	           Limited use
+
+------------------------------------------------------------------------------------------------------
+6. Resource Limits
+
+Resource Limits control how much CPU and Memory (RAM) a container can request (minimum needed) and use (maximum allowed).
+They help Kubernetes schedule Pods efficiently and prevent one Pod from using too many resources.
+
+Requests:	The minimum amount of CPU or Memory the container needs to run.	Scheduling decision.
+Limits:	The maximum amount of CPU or Memory the container can use.	Runtime restriction.
+
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "520Mi" 
+
+Scenario	Result:
+Pod exceeds CPU limit	It’s throttled (slowed down).
+Pod exceeds Memory limit	It’s terminated (OOMKilled).
+Node lacks resources for requests	Pod won’t be scheduled.
+
+Why It’s Useful
+Prevents Pods from hogging resources.
+Keeps cluster stable and balanced.
+Ensures fair performance across workloads.
+Helps autoscaler make better decisions.
+
+----------------------------------------------------------------------------------
+7. DaemonSets
+
+“A DaemonSet ensures that a specific Pod runs on all or selected Nodes.
+It’s mainly used for background system agents like logging or monitoring.
+When a new Node is added, the DaemonSet automatically deploys a Pod there.
+It differs from a Deployment, which runs multiple replicas for user workloads.”
+To run one Pod per Node automatically.
+Useful for services that must be present on all (or selected) Nodes.
+Use Case	Example
+Monitoring agents
+Log collectors	
+Network components	- kube-proxy
+Security agents	
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nginx-daemonset
+  labels:
+    app: nginx
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+
+New Node added to cluster	DaemonSet automatically creates a new Pod on that Node.
+Node removed from cluster	The DaemonSet Pod is deleted automatically.
+DaemonSet deleted	All its Pods are removed from Nodes.
+
+| **Feature**    | **Deployment**                     | **DaemonSet**                              |
+| -------------- | ---------------------------------- | ------------------------------------------ |
+| **Pod Count**  | Runs multiple replicas (scalable). | Runs **one Pod per Node**.                 |
+| **Scheduling** | Scheduler decides Node placement.  | Automatically schedules to **every Node**. |
+| **Use Case**   | Apps and web services.             | System daemons or background agents.       |
+| **Scaling**    | You can scale replicas manually.   | One Pod per Node (auto-managed).           |
+
+-------------------------------------------------------------------------------------------------------
