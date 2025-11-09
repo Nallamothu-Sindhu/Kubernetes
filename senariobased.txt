@@ -1,0 +1,147 @@
+You deployed a microservice in Kubernetes using a Deployment and exposed it via an Ingress.
+Users report random connection timeouts.
+All pods are Running and Ready, Service is ClusterIP, and Ingress config looks correct.
+You also notice Cluster Autoscaler is scaling nodes down occasionally.
+How would you diagnose and fix this issue?
+
+Step 1 – Check Ingress Controller Logs
+
+kubectl logs -n ingress-nginx <ingress-controller-pod>
+
+
+➡ If you see errors like:
+
+upstream timed out (110: Connection timed out)
+
+
+It means the ingress controller is unable to connect to backend pods — likely network or readiness issues.
+
+Step 2 – Verify Service Endpoints
+
+kubectl get endpoints <service-name> -o wide
+
+
+➡ If not all pods appear as endpoints, verify labels in the Deployment and Service.
+
+selector:
+  app: my-app
+
+
+must match
+
+labels:
+  app: my-app
+
+
+Step 3 – Investigate Node & Autoscaler Behavior
+
+kubectl get nodes
+kubectl describe node <node-name>
+
+
+➡ Nodes might be scaled down while serving traffic.
+When autoscaler deletes a node hosting live pods → existing client connections drop → timeouts.
+
+✅ Fix:
+
+Add a PodDisruptionBudget (PDB) to keep minimum pods available:
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: myapp-pdb
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: my-app
+
+
+Add terminationGracePeriodSeconds: 30 in Deployment.
+
+Step 4 – Check Readiness Probes
+
+kubectl describe pod <pod-name>
+
+
+➡ If readiness probe is too aggressive, ingress might send requests before the app is ready.
+
+✅ Fix:
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  failureThreshold: 3
+
+
+Step 5 – Verify Pod Network (CNI Layer)
+
+kubectl exec -it <ingress-pod> -- curl http://<pod-ip>:<port>
+kubectl logs -n kube-system <calico-node-pod>
+
+
+➡ Packet drops from CNI plugin (like Calico or Flannel) can cause intermittent network loss when nodes churn due to autoscaling.
+
+🎯 Root Cause (Real-World Example):
+
+In production, timeouts often happen because:
+
+Cluster autoscaler removes nodes hosting active pods
+
+Pods get killed mid-connection
+
+No PDB or termination grace period
+
+✅ Solution Summary:
+
+Add PDB to protect availability
+
+Set terminationGracePeriodSeconds
+
+Tune autoscaler scale-down delay
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-> What is a Service in Kubernetes, and why is it needed? Give a real-time example?
+
+What is a Service in Kubernetes?
+A: A Service is an abstraction that defines a logical set of Pods and a policy to access them. It provides stable networking (IP & DNS) to Pods, which may change dynamically.
+
+Q: Why is it needed?
+Pods have dynamic IPs; Service provides a stable endpoint.
+Enables load balancing across multiple pods.
+Facilitates communication between microservices.
+
+Q: Real-time example:
+
+A Deployment has 3 pods of a web app.
+
+A ClusterIP Service exposes the app internally to other services.
+
+If pods restart or scale, the Service ensures traffic is routed correctly.
+
+Example YAML:
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app-service
+spec:
+  selector:
+    app: my-app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+
+
+Commands:
+
+kubectl apply -f service.yaml
+kubectl get svc
+
+
+Fix readiness probes & service selectors
